@@ -112,54 +112,99 @@ def _fmt_combo_section(target: NFTInfo, active: list[NFTInfo]) -> str:
     return "\n".join(lines)
 
 
-def _fmt_sold_section(sold: list[dict[str, Any]]) -> str:
-    """Сформировать блок «продано» по сырым записям Portals."""
+def _ago(dt: datetime) -> str:
+    now = datetime.now(timezone.utc)
+    delta = now - dt
+    if delta.days >= 1:
+        return f"{delta.days} дн назад"
+    if delta.seconds >= 3600:
+        return f"{delta.seconds // 3600} ч назад"
+    return f"{max(1, delta.seconds // 60)} мин назад"
 
-    sold_prices: list[float] = []
-    sold_dates: list[datetime] = []
-    for s in sold:
-        # Цена продажи может быть в полях `sold_price`, `price`, `amount`.
-        for key in ("sold_price", "price", "amount", "sell_price"):
-            value = _to_float(s.get(key))
-            if value is not None and value > 0:
-                sold_prices.append(value)
-                break
-        # Дата продажи — в `sold_at`, `created_at`, `executed_at`.
-        for key in ("sold_at", "created_at", "executed_at", "completed_at"):
-            dt = _to_dt(s.get(key))
-            if dt is not None:
-                sold_dates.append(dt)
-                break
 
-    if not sold_prices:
+def _parse_sale_record(s: dict[str, Any]) -> tuple[Optional[float], Optional[datetime]]:
+    price: Optional[float] = None
+    for key in ("sold_price", "price", "amount", "sell_price"):
+        value = _to_float(s.get(key))
+        if value is not None and value > 0:
+            price = value
+            break
+    dt: Optional[datetime] = None
+    for key in ("sold_at", "created_at", "executed_at", "completed_at", "date"):
+        parsed = _to_dt(s.get(key))
+        if parsed is not None:
+            dt = parsed
+            break
+    return price, dt
+
+
+def _fmt_nft_sales_section(sales: list[dict[str, Any]]) -> str:
+    """История продаж **этого конкретного** лота."""
+
+    parsed: list[tuple[Optional[float], Optional[datetime]]] = [
+        _parse_sale_record(s) for s in sales
+    ]
+    parsed = [(p, d) for p, d in parsed if p is not None]
+
+    if not parsed:
         return (
-            "🔴 <b>Sold (история продаж)</b>: данных нет "
-            "(возможно, ни одного с таким комбо ещё не продавалось)."
+            "🔴 <b>История этого лота</b>: раньше никому не продавался."
         )
 
-    sold_prices.sort()
-    pmin, pmax = sold_prices[0], sold_prices[-1]
-    pavg = sum(sold_prices) / len(sold_prices)
-    pmed = median(sold_prices)
+    prices = sorted(p for p, _ in parsed if p is not None)
+    pmin, pmax = prices[0], prices[-1]
+    pavg = sum(prices) / len(prices)
+    pmed = median(prices)
+    sorted_by_date = sorted(
+        ((p, d) for p, d in parsed if d is not None),
+        key=lambda x: x[1],
+        reverse=True,
+    )
 
     lines = [
-        f"🔴 <b>Sold (история продаж)</b>: {len(sold_prices)} шт.",
+        f"🔴 <b>История этого лота</b>: {len(parsed)} продаж(и).",
         (
             f"   Min {pmin:.2f} · Median {pmed:.2f} · Avg {pavg:.2f} · "
             f"Max {pmax:.2f} TON"
         ),
     ]
-    if sold_dates:
-        last = max(sold_dates)
-        now = datetime.now(timezone.utc)
-        delta = now - last
-        if delta.days >= 1:
-            ago = f"{delta.days} дн назад"
-        elif delta.seconds >= 3600:
-            ago = f"{delta.seconds // 3600} ч назад"
-        else:
-            ago = f"{max(1, delta.seconds // 60)} мин назад"
-        lines.append(f"   Последняя продажа: {ago}")
+    if sorted_by_date:
+        lines.append("")
+        lines.append("   <i>Последние продажи:</i>")
+        for price, dt in sorted_by_date[:5]:
+            lines.append(
+                f"   • {price:.2f} TON — {_ago(dt)}"
+            )
+    return "\n".join(lines)
+
+
+def _fmt_combo_sold_section(sold: list[dict[str, Any]]) -> str:
+    """Комбо-sold (все проданные с тем же model+background)."""
+
+    parsed = [_parse_sale_record(s) for s in sold]
+    parsed = [(p, d) for p, d in parsed if p is not None]
+
+    if not parsed:
+        return (
+            "🔴 <b>Sold по комбо</b>: данных нет."
+        )
+
+    prices = sorted(p for p, _ in parsed if p is not None)
+    pmin, pmax = prices[0], prices[-1]
+    pavg = sum(prices) / len(prices)
+    pmed = median(prices)
+
+    lines = [
+        f"🔴 <b>Sold по комбо</b>: {len(parsed)} шт.",
+        (
+            f"   Min {pmin:.2f} · Median {pmed:.2f} · Avg {pavg:.2f} · "
+            f"Max {pmax:.2f} TON"
+        ),
+    ]
+    dated = [(p, d) for p, d in parsed if d is not None]
+    if dated:
+        last_dt = max(d for _, d in dated)
+        lines.append(f"   Последняя продажа: {_ago(last_dt)}")
     return "\n".join(lines)
 
 
@@ -223,18 +268,28 @@ async def history_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
                 limit=100,
             )
 
-            sold: list[dict[str, Any]] = []
-            sold_error: Optional[str] = None
+            nft_sales: list[dict[str, Any]] = []
+            nft_sales_error: Optional[str] = None
+            combo_sold: list[dict[str, Any]] = []
+            combo_sold_error: Optional[str] = None
             if init_data:
                 try:
-                    sold = await client.list_combo_sold(
+                    nft_sales = await client.list_nft_sales(
+                        uuid=uuid,
+                        limit=50,
+                    )
+                except TonelError as exc:
+                    nft_sales_error = str(exc)
+                    log.info("/history: nft_sales lookup failed: %s", exc)
+                try:
+                    combo_sold = await client.list_combo_sold(
                         model_name=model_name,
                         background_name=background_name,
                         limit=50,
                     )
                 except TonelError as exc:
-                    sold_error = str(exc)
-                    log.info("/history: sold lookup failed: %s", exc)
+                    combo_sold_error = str(exc)
+                    log.info("/history: combo_sold lookup failed: %s", exc)
     except TonelError as exc:
         log.warning("/history: portals error: %s", exc)
         await update.message.reply_text(
@@ -260,19 +315,29 @@ async def history_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
     combo_section = _fmt_combo_section(target, active)
 
+    sections: list[str] = [combo_section]
+
     if init_data:
-        if sold_error:
-            sold_section = (
-                "🟠 <b>Sold (история продаж)</b>: init_data не подошёл "
-                f"(<code>{_esc(sold_error[:200])}</code>). "
-                "Перевыпусти через <code>refresh_init_data</code>."
+        if nft_sales_error:
+            sections.append(
+                "🟠 <b>История этого лота</b>: init_data не подошёл "
+                f"(<code>{_esc(nft_sales_error[:200])}</code>). "
+                "Перевыпусти <code>refresh_init_data</code>."
             )
         else:
-            sold_section = _fmt_sold_section(sold)
-    else:
-        sold_section = _sold_unavailable_section()
+            sections.append(_fmt_nft_sales_section(nft_sales))
 
-    text = f"{header}\n\n{combo_section}\n\n{sold_section}"
+        if combo_sold_error:
+            sections.append(
+                "⚪ <b>Sold по комбо</b>: комбо-эндпоинт в Portals пока не найден. "
+                f"Детали в серверном логе (пришли мне строку «Portals combo-sold candidates failures»)."
+            )
+        else:
+            sections.append(_fmt_combo_sold_section(combo_sold))
+    else:
+        sections.append(_sold_unavailable_section())
+
+    text = f"{header}\n\n" + "\n\n".join(sections)
     await update.message.reply_text(
         text,
         parse_mode=ParseMode.HTML,
