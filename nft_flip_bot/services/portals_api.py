@@ -125,6 +125,7 @@ def _parse_listing(item: dict[str, Any]) -> Optional[NFTInfo]:
     deeplink_id = tg_id if isinstance(tg_id, str) and tg_id else str(uuid)
     portals_link = PORTALS_MINIAPP_TEMPLATE.format(token_id=deeplink_id)
 
+    floor_price = _to_float(item.get("floor_price"))
     return NFTInfo(
         token_id=str(uuid),
         collection=name,
@@ -132,13 +133,13 @@ def _parse_listing(item: dict[str, Any]) -> Optional[NFTInfo]:
         price_ton=price,
         rank=None,
         volume_24h_ton=None,
-        listed_at=item.get("listed_at"),
         model=fields["model"],
         background=fields["background"],
         pattern=fields["pattern"],
         photo_url=str(photo_url) if photo_url else None,
         telegram_link=telegram_link,
         portals_link=portals_link,
+        floor_price_ton=floor_price,
     )
 
 

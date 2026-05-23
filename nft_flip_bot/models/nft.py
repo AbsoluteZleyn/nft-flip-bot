@@ -63,6 +63,31 @@ class NFTInfo(BaseModel):
         description="Ссылка на лот в Portals Mini App "
                     "(t.me/portals/market?startapp=gift_<id>)",
     )
+    floor_price_ton: Optional[float] = Field(
+        default=None,
+        ge=0,
+        description="Floor по комбо (model + background) на маркетплейсе. "
+                    "Если price_ton < floor_price_ton — лот «ниже флора».",
+    )
+
+    @property
+    def is_below_floor(self) -> bool:
+        """Цена строго ниже floor по комбо model+background."""
+
+        if self.floor_price_ton is None:
+            return False
+        return self.price_ton < self.floor_price_ton
+
+    @property
+    def is_monochrome(self) -> bool:
+        """Эвристика «монохром»: pattern.name содержит ``Monochrome``.
+
+        Portals помечает однотонные узоры словом ``Monochrome`` в названии.
+        """
+
+        if self.pattern is None or not self.pattern.name:
+            return False
+        return "monochrome" in self.pattern.name.lower()
 
 
 class FlipEstimate(BaseModel):
