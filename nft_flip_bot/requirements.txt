@@ -1,0 +1,10 @@
+python-telegram-bot==20.8
+# Note: python-telegram-bot 20.8 pins httpx ~=0.26.0, поэтому, несмотря на то что
+# в исходных требованиях фигурировал httpx 0.27.0, для совместимости использован
+# httpx 0.26.0. Если нужна именно httpx 0.27.x — обновите python-telegram-bot
+# до 21.7+.
+httpx[http2]==0.26.0
+beautifulsoup4==4.12.3
+aiosqlite==0.20.0
+aiocron==1.8
+pydantic==2.7.1

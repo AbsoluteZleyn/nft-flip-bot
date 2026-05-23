@@ -1,0 +1,20 @@
+version: "3.9"
+
+services:
+  nft_flip_bot:
+    build: .
+    image: nft-flip-bot:latest
+    container_name: nft_flip_bot
+    restart: unless-stopped
+    environment:
+      BOT_TOKEN: ${BOT_TOKEN}
+      # Optional overrides
+      DB_PATH: /app/data/nft_flip_bot.sqlite3
+      MAX_PRICE_TON: ${MAX_PRICE_TON:-5}
+      MAX_RANK: ${MAX_RANK:-1000}
+      MIN_VOLUME_TON: ${MIN_VOLUME_TON:-1}
+      GROWTH_FACTOR: ${GROWTH_FACTOR:-0.5}
+      TONEL_FEE: ${TONEL_FEE:-0.02}
+      TX_FEE_TON: ${TX_FEE_TON:-0.05}
+    volumes:
+      - ./data:/app/data
