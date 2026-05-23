@@ -50,6 +50,9 @@ class Settings:
     scan_max_notify: int
     scan_limit: int
 
+    # Источник данных (Portals)
+    portals_api_base: str = "https://portal-market.com/api"
+
     # Прочее
     tonel_allowed_host: str = "tonel.io"
 
@@ -76,4 +79,7 @@ def load_settings() -> Settings:
         scan_interval_min=_env_int("SCAN_INTERVAL_MIN", 1),
         scan_max_notify=_env_int("SCAN_MAX_NOTIFY", 5),
         scan_limit=_env_int("SCAN_LIMIT", 50),
+        portals_api_base=os.getenv(
+            "PORTALS_API_BASE", "https://portal-market.com/api"
+        ),
     )
