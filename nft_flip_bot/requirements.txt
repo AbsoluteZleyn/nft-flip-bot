@@ -8,3 +8,7 @@ beautifulsoup4==4.12.3
 aiosqlite==0.20.0
 aiocron==1.8
 pydantic==2.7.1
+# Опциональная зависимость для /history sold (Telethon-сессия пользователя
+# для получения init_data Mini App Portals). Если не используешь
+# /history_auth — можно не ставить (импорт лениво).
+telethon==1.36.0

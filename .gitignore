@@ -30,6 +30,9 @@ data/
 *.sqlite3
 *.sqlite3-journal
 *.db
+# Telethon-сессия и init_data (НИКОГДА не коммитить)
+*.session
+portals_init_data.txt
 
 # Logs
 *.log

@@ -150,19 +150,26 @@ class PortalsClient:
         self,
         base_url: str = PORTALS_API_BASE,
         timeout: float = 15.0,
+        init_data: Optional[str] = None,
     ) -> None:
         self._base_url = base_url.rstrip("/")
         self._timeout = timeout
+        self._init_data = init_data
         self._client: Optional[httpx.AsyncClient] = None
 
     async def __aenter__(self) -> "PortalsClient":
+        headers = {
+            "Accept": "application/json",
+            "User-Agent": (
+                "nft-flip-bot/0.1 (+github.com/AbsoluteZleyn/nft-flip-bot)"
+            ),
+        }
+        if self._init_data:
+            headers["Authorization"] = f"tma {self._init_data}"
         self._client = httpx.AsyncClient(
             base_url=self._base_url,
             timeout=self._timeout,
-            headers={
-                "Accept": "application/json",
-                "User-Agent": "nft-flip-bot/0.1 (+github.com/AbsoluteZleyn/nft-flip-bot)",
-            },
+            headers=headers,
             follow_redirects=True,
         )
         return self
@@ -247,6 +254,78 @@ class PortalsClient:
             if nft is not None:
                 listings.append(nft)
         return listings
+
+    async def list_combo_sold(
+        self,
+        model_name: str,
+        background_name: str,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        """Продано (sold) тем же комбо ``model + background``.
+
+        Эндпоинт **требует** ``Authorization: tma <init_data>``. Если
+        клиент создан без ``init_data``, метод выбросит ``TonelError``.
+
+        Возвращает список словарей («сырой» JSON от Portals): у нас тут нет
+        полной NFTInfo, потому что нам важны лишь цены и даты продажи для
+        агрегации в ``/history``.
+
+        Endpoint выбирается по очереди из списка кандидатов: точное имя
+        ещё не подтверждено публично, и мы пробуем самые вероятные пути:
+
+        * ``/sales`` (видели 401 «missing auth» — значит существует)
+        * ``/trades`` (тоже 401)
+        * ``/activity`` (тоже 401)
+
+        Первый, который вернул 200, считается «нашим». Лог пишет, какой
+        именно сработал, чтобы потом можно было захардкодить.
+        """
+
+        if not self._init_data:
+            raise TonelError(
+                "list_combo_sold: требуется init_data (Telethon-сессия)"
+            )
+
+        params = {
+            "limit": str(max(1, min(200, int(limit)))),
+            "offset": "0",
+            "filter_by_models": model_name,
+            "filter_by_backdrops": background_name,
+        }
+
+        candidates = [
+            "/sales",
+            "/trades",
+            "/activity",
+            "/nfts/sales",
+        ]
+        last_error: Optional[str] = None
+        for path in candidates:
+            try:
+                response = await self._session.get(path, params=params)
+            except httpx.HTTPError as exc:
+                last_error = f"{path}: {exc}"
+                continue
+            if response.status_code == 200:
+                log.info("Portals sold endpoint = %s", path)
+                payload = response.json()
+                if isinstance(payload, dict):
+                    results = payload.get("results") or payload.get("data") or []
+                    if isinstance(results, list):
+                        return [r for r in results if isinstance(r, dict)]
+                    return []
+                if isinstance(payload, list):
+                    return [r for r in payload if isinstance(r, dict)]
+                return []
+            last_error = (
+                f"{path}: HTTP {response.status_code} {response.text[:200]}"
+            )
+            log.debug("Portals sold candidate %s failed: %s", path, last_error)
+
+        raise TonelError(
+            f"Portals list_combo_sold: ни один эндпоинт не сработал. "
+            f"Последняя ошибка: {last_error}"
+        )
 
     async def fetch_nft(self, uuid: str) -> NFTInfo:
         """Один лот по UUID Portals."""

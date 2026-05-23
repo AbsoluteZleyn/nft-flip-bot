@@ -34,8 +34,12 @@ Telegram-бот для «флиппинга» Telegram-NFT-подарков. О�
     цены), сколько дешевле/дороже исходного лота, топ-3 самых дешёвых.
     Опирается на публичный Portals API
     (`filter_by_models` + `filter_by_backdrops`).
-  - **Sold-история** — заглушка; требует Telethon-авторизации к
-    приватному Portals-эндпоинту, будет в отдельном PR.
+  - **Sold-история**: фактически проданные лоты с тем же комбо —
+    включается автоматически, если в `data/portals_init_data.txt`
+    лежит свежий `tgWebAppData` Mini App Portals. Для его
+    получения запусти (см. «Telethon init_data» ниже):
+    `python -m nft_flip_bot.scripts.refresh_init_data`.
+    init_data истекает через ~24 ч — запускай скрипт заново.
 - Периодическое обновление цен в портфеле через `aiocron`.
 - SQLite-хранилище через `aiosqlite`.
 - SSRF-guard: для ручного анализа принимаются только HTTPS-ссылки с
@@ -82,6 +86,42 @@ BOT_TOKEN=YOUR_TELEGRAM_BOT_TOKEN docker compose up -d --build
 | `SCAN_MAX_NOTIFY`   | `5`                    | Лимит пушей на пользователя за один прогон                     |
 | `SCAN_LIMIT`        | `50`                   | Сколько лотов брать из фида за один запрос                     |
 | `PORTALS_API_BASE`  | `https://portal-market.com/api` | URL Portals API для авто-скана                      |
+| `PORTALS_INIT_DATA_PATH` | `data/portals_init_data.txt` | Путь к файлу с init_data Mini App (для sold-истории)        |
+| `TELEGRAM_API_ID`   | —                      | (только для хелпера init_data) my.telegram.org/apps        |
+| `TELEGRAM_API_HASH` | —                      | (только для хелпера init_data) my.telegram.org/apps        |
+
+## Telethon init_data (sold-история)
+
+Portals показывает историю фактически проданных лотов **только** по
+заголовку `Authorization: tma <tgWebAppData>` (Mini App передаёт его в
+каждый запрос). Для ботов этот токен не выдают — нужна «user-сессия»
+самого владельца бота. Именно для этого в репе есть хелпер на Telethon.
+
+### Одноразовая подготовка
+
+1. **Получи `api_id` и `api_hash`** на https://my.telegram.org/apps
+   (логин через свой Telegram → «API development tools» → создай app).
+2. Пропиши их в окружение:
+   ```powershell
+   $env:TELEGRAM_API_ID = "123456"
+   $env:TELEGRAM_API_HASH = "0123456789abcdef0123456789abcdef"
+   ```
+   (на этой же машине, где запускается бот)
+
+### Каждые ~24 ч (init_data истекает)
+
+```powershell
+.\.venv\Scripts\python.exe -m nft_flip_bot.scripts.refresh_init_data
+```
+
+Первый запуск попросит в консоли:
+- твой телефон (в формате `+7...`);
+- одноразовый код из Telegram;
+- если включён 2FA — пароль.
+
+После этого локально ложится `data/portals_user.session` (больше коды
+не нужны) и `data/portals_init_data.txt` — свежий токен. Бот при
+запросе `/history` автоматически возьмёт его.
 
 ## Структура
 

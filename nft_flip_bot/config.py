@@ -53,6 +53,11 @@ class Settings:
     # Источник данных (Portals)
     portals_api_base: str = "https://portal-market.com/api"
 
+    # Путь к файлу с tgWebAppData (init_data) Mini App Portals.
+    # Если файл существует и не пуст — /history запрашивает sold-историю
+    # с заголовком ``Authorization: tma <init_data>``.
+    portals_init_data_path: str = "data/portals_init_data.txt"
+
     # Прочее
     tonel_allowed_host: str = "tonel.io"
 
@@ -85,5 +90,8 @@ def load_settings() -> Settings:
         scan_limit=_env_int("SCAN_LIMIT", 50),
         portals_api_base=os.getenv(
             "PORTALS_API_BASE", "https://portal-market.com/api"
+        ),
+        portals_init_data_path=os.getenv(
+            "PORTALS_INIT_DATA_PATH", "data/portals_init_data.txt"
         ),
     )
