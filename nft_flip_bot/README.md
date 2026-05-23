@@ -8,9 +8,13 @@ Telegram-бот для «флиппинга» NFT-подарков через с
 - Расчёт ожидаемой resale-цены и потенциальной прибыли (с учётом комиссии Tonel и сетевых издержек).
 - Бюджет в TON: команды `/budget <amount>` и `/budget show`.
 - Список выбранных позиций: `/list`, `/remove <token_id>`, `/flip <token_id>`.
+- **Авто-скан** выгодных лотов: `/scan_on`, `/scan_off`, `/scan_now`.
+  Раз в N минут (по умолчанию 5) бот запрашивает фид Tonel,
+  фильтрует через `passes_filters` + `is_profitable` и пушит подписчикам.
+  Дедуп в таблице `notified` (один и тот же `token_id` придёт один раз на пользователя).
 - Периодическое (раз в сутки) обновление цен через `aiocron`.
 - SQLite-хранилище через `aiosqlite`.
-- Защита от SSRF: принимаются только ссылки с домена `tonel.io`.
+- Защита от SSRF: принимаются только HTTPS-ссылки с домена `tonel.io`.
 
 ## Запуск локально
 
@@ -47,6 +51,9 @@ BOT_TOKEN=YOUR_TELEGRAM_BOT_TOKEN docker compose up -d --build
 | `GROWTH_FACTOR`  | `0.5`        | Множитель ожидаемого роста цены                |
 | `TONEL_FEE`      | `0.02`       | Комиссия Tonel (доля)                          |
 | `TX_FEE_TON`     | `0.05`       | Транзакционная комиссия сети (TON)             |
+| `SCAN_INTERVAL_MIN` | `5`       | Как часто запускается авто-скан (мин, 1–59)         |
+| `SCAN_MAX_NOTIFY`| `5`          | Лимит пушей на пользователя за один прогон            |
+| `SCAN_LIMIT`     | `50`         | Сколько лотов брать из фида Tonel за один запрос          |
 
 ## Структура
 
@@ -62,6 +69,7 @@ nft_flip_bot/
 ├─ services/
 │   ├─ tonel_api.py
 │   ├─ price_estimator.py
+│   ├─ scanner.py        # авто-скан + пуш подписчикам
 │   └─ scheduler.py
 ├─ models/
 │   ├─ db.py

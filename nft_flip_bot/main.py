@@ -24,9 +24,13 @@ from .handlers import (
     list_cmd,
     on_callback,
     remove_cmd,
+    scan_now_cmd,
+    scan_off_cmd,
+    scan_on_cmd,
     start,
 )
 from .models.db import Database
+from .services.scanner import AutoScanner
 from .services.scheduler import PriceRefresher
 
 log = logging.getLogger("nft_flip_bot")
@@ -54,6 +58,7 @@ def build_application(settings: Settings, db: Database) -> Application:
     app.bot_data["settings"] = settings
     app.bot_data["db"] = db
     app.bot_data["refresher"] = PriceRefresher(db, settings)
+    app.bot_data["scanner"] = AutoScanner(app.bot, db, settings)
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_cmd))
@@ -61,6 +66,9 @@ def build_application(settings: Settings, db: Database) -> Application:
     app.add_handler(CommandHandler("list", list_cmd))
     app.add_handler(CommandHandler("remove", remove_cmd))
     app.add_handler(CommandHandler("flip", flip_cmd))
+    app.add_handler(CommandHandler("scan_on", scan_on_cmd))
+    app.add_handler(CommandHandler("scan_off", scan_off_cmd))
+    app.add_handler(CommandHandler("scan_now", scan_now_cmd))
     app.add_handler(CallbackQueryHandler(on_callback, pattern=r"^flip:"))
     app.add_handler(
         MessageHandler(filters.TEXT & ~filters.COMMAND, analyze_message)
@@ -74,12 +82,16 @@ async def _post_init(application: Application) -> None:
     await db.init()
     refresher: PriceRefresher = application.bot_data["refresher"]
     refresher.start()
+    scanner: AutoScanner = application.bot_data["scanner"]
+    scanner.start()
     log.info("Bot post_init complete")
 
 
 async def _post_shutdown(application: Application) -> None:
     refresher: PriceRefresher = application.bot_data["refresher"]
     refresher.stop()
+    scanner: AutoScanner = application.bot_data["scanner"]
+    scanner.stop()
 
 
 def main() -> None:

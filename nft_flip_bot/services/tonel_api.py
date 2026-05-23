@@ -27,6 +27,9 @@ TONEL_BASE = f"https://{ALLOWED_HOST}"
 TONEL_ITEM_API = TONEL_BASE + "/api/v1/items/{token_id}"
 TONEL_ITEM_PAGE = TONEL_BASE + "/item/{token_id}"
 TONEL_TRADE_LINK = TONEL_BASE + "/trade?item={token_id}&price={price}"
+# TODO: эндпоинт фида лотов (для авто-скана). Без реальных путей Tonel
+# скан вернёт пустой список — это ожидаемо и попадаёт в логи.
+TONEL_LISTINGS_API = TONEL_BASE + "/api/v1/listings"
 
 # Принимаем только HTTPS-ссылки на tonel.io (см. требования к безопасности).
 ITEM_URL_RE = re.compile(
@@ -229,6 +232,95 @@ class TonelClient:
             volume_24h_ton=_parse_float(payload.get("volume_24h_ton")),
             volume_7d_ton=_parse_float(payload.get("volume_7d_ton")),
             history=history,
+            url=TONEL_ITEM_PAGE.format(token_id=token_id),
+        )
+
+    # ------------------------------------------------------------------
+
+    async def scan_listings(self, limit: int = 50) -> list[NFTInfo]:
+        """Вернуть активные лоты для авто-скана.
+
+        Сейчас эндпоинт фида Tonel ещё не подтверждён, поэтому метод
+        пробует GET по стабовому ``TONEL_LISTINGS_API`` с параметром ``limit``
+        и логирует ошибки как warning — авто-сканер в этом случае просто
+        ничего не отправляет пользователям.
+
+        TODO: подключить реальный эндпоинт Tonel / Tonnel.Network или Getgems
+        и разобрать формат ответа.
+        """
+
+        url = TONEL_LISTINGS_API
+        try:
+            resp = await self._client.get(url, params={"limit": limit})
+        except httpx.HTTPError as exc:
+            log.warning("scan_listings: сетевая ошибка %s", exc)
+            return []
+
+        if resp.status_code == 404:
+            # Стаб эндпоинт ещё не реализован — это ожидаемо.
+            log.info("scan_listings: эндпоинт фида пока не подключён (404)")
+            return []
+        if resp.status_code >= 400:
+            log.warning("scan_listings: HTTP %s", resp.status_code)
+            return []
+
+        try:
+            payload = resp.json()
+        except ValueError:
+            log.warning("scan_listings: вернулся не-JSON")
+            return []
+
+        # TODO: подогнать под реальную структуру.
+        raw_items = _first_not_none(
+            payload.get("items") if isinstance(payload, dict) else None,
+            payload.get("results") if isinstance(payload, dict) else None,
+            payload if isinstance(payload, list) else None,
+            [],
+        )
+
+        result: list[NFTInfo] = []
+        for raw in raw_items:
+            if not isinstance(raw, dict):
+                continue
+            try:
+                nft = self._parse_listing_item(raw)
+            except (TonelError, KeyError, ValueError) as exc:
+                log.debug("scan_listings: пропускаю спорный элемент: %s", exc)
+                continue
+            if nft is not None:
+                result.append(nft)
+        return result
+
+    def _parse_listing_item(self, payload: dict) -> Optional[NFTInfo]:
+        """Преобразовать входящий элемент фида в NFTInfo."""
+
+        raw_id = _first_not_none(payload.get("id"), payload.get("token_id"))
+        if raw_id is None:
+            return None
+        token_id = str(raw_id)
+        if not TOKEN_ID_RE.match(token_id):
+            return None
+
+        price = _parse_float(
+            _first_not_none(payload.get("price_ton"), payload.get("price"))
+        )
+        if price is None:
+            return None
+
+        raw_collection = _first_not_none(
+            payload.get("collection"), payload.get("collection_name"), ""
+        )
+        raw_name = _first_not_none(payload.get("name"), "")
+        raw_rank = _first_not_none(payload.get("rank"), payload.get("rarity_rank"))
+
+        return NFTInfo(
+            token_id=token_id,
+            collection=str(raw_collection),
+            name=str(raw_name),
+            price_ton=price,
+            rank=_parse_int(raw_rank),
+            volume_24h_ton=_parse_float(payload.get("volume_24h_ton")),
+            volume_7d_ton=_parse_float(payload.get("volume_7d_ton")),
             url=TONEL_ITEM_PAGE.format(token_id=token_id),
         )
 

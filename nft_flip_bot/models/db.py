@@ -38,6 +38,23 @@ CREATE TABLE IF NOT EXISTS nfts (
     PRIMARY KEY (token_id, user_id),
     FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
 );
+
+-- Подписка пользователя на авто-скан выгодных NFT.
+CREATE TABLE IF NOT EXISTS subscriptions (
+    user_id     INTEGER PRIMARY KEY,
+    enabled     INTEGER NOT NULL DEFAULT 1,
+    updated_at  TEXT NOT NULL,
+    FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
+);
+
+-- Дедуп пушей: что мы уже кому слали.
+CREATE TABLE IF NOT EXISTS notified (
+    user_id      INTEGER NOT NULL,
+    token_id     TEXT NOT NULL,
+    notified_at  TEXT NOT NULL,
+    PRIMARY KEY (user_id, token_id),
+    FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
+);
 """
 
 
@@ -229,3 +246,68 @@ class Database:
             )
             await self._recalc_used(db, user_id)
             await db.commit()
+
+    # ---- subscriptions ---------------------------------------------------
+
+    async def set_subscription(self, user_id: int, enabled: bool) -> None:
+        async with aiosqlite.connect(self.path) as db:
+            await db.execute(
+                """
+                INSERT INTO subscriptions(user_id, enabled, updated_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(user_id) DO UPDATE SET
+                    enabled=excluded.enabled,
+                    updated_at=excluded.updated_at
+                """,
+                (user_id, 1 if enabled else 0, datetime.now(timezone.utc).isoformat()),
+            )
+            await db.commit()
+
+    async def get_subscription(self, user_id: int) -> bool:
+        async with aiosqlite.connect(self.path) as db:
+            async with db.execute(
+                "SELECT enabled FROM subscriptions WHERE user_id=?",
+                (user_id,),
+            ) as cur:
+                row = await cur.fetchone()
+        return bool(row[0]) if row else False
+
+    async def list_subscribed_users(self) -> list[int]:
+        async with aiosqlite.connect(self.path) as db:
+            async with db.execute(
+                "SELECT user_id FROM subscriptions WHERE enabled=1"
+            ) as cur:
+                rows = await cur.fetchall()
+        return [int(r[0]) for r in rows]
+
+    # ---- dedup -----------------------------------------------------------
+
+    async def was_notified(self, user_id: int, token_id: str) -> bool:
+        async with aiosqlite.connect(self.path) as db:
+            async with db.execute(
+                "SELECT 1 FROM notified WHERE user_id=? AND token_id=?",
+                (user_id, token_id),
+            ) as cur:
+                row = await cur.fetchone()
+        return row is not None
+
+    async def mark_notified(self, user_id: int, token_id: str) -> None:
+        async with aiosqlite.connect(self.path) as db:
+            await db.execute(
+                """
+                INSERT OR IGNORE INTO notified(user_id, token_id, notified_at)
+                VALUES (?, ?, ?)
+                """,
+                (user_id, token_id, datetime.now(timezone.utc).isoformat()),
+            )
+            await db.commit()
+
+    async def clear_notifications(self, user_id: int) -> int:
+        async with aiosqlite.connect(self.path) as db:
+            cur = await db.execute(
+                "DELETE FROM notified WHERE user_id=?",
+                (user_id,),
+            )
+            removed = cur.rowcount
+            await db.commit()
+        return int(removed or 0)

@@ -1,6 +1,7 @@
 """Service layer."""
 
 from .price_estimator import estimate_flip, passes_filters
+from .scanner import AutoScanner
 from .scheduler import PriceRefresher
 from .tonel_api import (
     TonelClient,
@@ -14,6 +15,7 @@ from .tonel_api import (
 __all__ = [
     "estimate_flip",
     "passes_filters",
+    "AutoScanner",
     "PriceRefresher",
     "TonelClient",
     "TonelError",
