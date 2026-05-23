@@ -1,7 +1,7 @@
 """Автоматический сканер выгодных NFT.
 
 Раз в `SCAN_INTERVAL_MIN` минут запрашивает список свежих лотов через
-`TonelClient.scan_listings`, прогоняет их через те же фильтры и расчёт
+`PortalsClient.scan_listings`, прогоняет их через те же фильтры и расчёт
 прибыли, что и ручной анализ, и шлёт в Telegram уведомления тем
 пользователям, кто включил подписку через `/scan_on`.
 
@@ -22,8 +22,9 @@ from telegram.error import TelegramError
 from ..config import Settings
 from ..models.db import Database
 from ..models.nft import NFTInfo
+from .portals_api import PortalsClient
 from .price_estimator import estimate_flip, passes_filters
-from .tonel_api import TonelClient, build_portals_link, build_trade_link
+from .tonel_api import build_portals_link
 
 log = logging.getLogger(__name__)
 
@@ -80,8 +81,16 @@ class AutoScanner:
                 return {}
 
             log.info("AutoScanner: %d подписчик(а/ов), запрашиваю фид", len(users))
-            async with TonelClient() as client:
-                listings = await client.scan_listings(limit=self._settings.scan_limit)
+            try:
+                async with PortalsClient(
+                    base_url=self._settings.portals_api_base
+                ) as client:
+                    listings = await client.scan_listings(
+                        limit=self._settings.scan_limit
+                    )
+            except Exception as exc:
+                log.warning("AutoScanner: не удалось получить фид Portals: %s", exc)
+                return {}
 
             if not listings:
                 log.info("AutoScanner: фид пуст (или эндпоинт ещё не подключён)")
@@ -109,8 +118,19 @@ class AutoScanner:
         """
 
         async with self._lock:
-            async with TonelClient() as client:
-                listings = await client.scan_listings(limit=self._settings.scan_limit)
+            try:
+                async with PortalsClient(
+                    base_url=self._settings.portals_api_base
+                ) as client:
+                    listings = await client.scan_listings(
+                        limit=self._settings.scan_limit
+                    )
+            except Exception as exc:
+                log.warning(
+                    "AutoScanner.run_for_user: не удалось получить фид Portals: %s",
+                    exc,
+                )
+                return 0
 
             candidates = await self._filter_candidates_for_user(listings, user_id)
             return await self.notify_user(user_id, candidates)
@@ -232,10 +252,6 @@ class AutoScanner:
         if nft.telegram_link:
             lines.append(f"📱 Telegram: {nft.telegram_link}")
         lines.append(f"🛒 Купить: {portals_link}")
-        # Старая ссылка на trade оставлена для обратной совместимости с
-        # пользователями текущей версии Tonel/реверс-источника.
-        legacy_link = build_trade_link(nft.token_id, estimate.resale_price_ton)
-        lines.append(f"🔗 {legacy_link}")
         lines.append("")
         lines.append(f"➕ Добавить в портфель: /flip {nft.token_id}")
         return "\n".join(lines)

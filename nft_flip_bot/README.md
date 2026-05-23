@@ -74,6 +74,7 @@ BOT_TOKEN=YOUR_TELEGRAM_BOT_TOKEN docker compose up -d --build
 | `SCAN_INTERVAL_MIN` | `1`                    | Как часто запускается авто-скан (мин, 1–59)                    |
 | `SCAN_MAX_NOTIFY`   | `5`                    | Лимит пушей на пользователя за один прогон                     |
 | `SCAN_LIMIT`        | `50`                   | Сколько лотов брать из фида за один запрос                     |
+| `PORTALS_API_BASE`  | `https://portal-market.com/api` | URL Portals API для авто-скана                      |
 
 ## Структура
 
@@ -89,7 +90,8 @@ nft_flip_bot/
 │   ├─ scan.py           # /scan_on /scan_off /scan_now
 │   └─ utils.py
 ├─ services/
-│   ├─ tonel_api.py      # HTTP-клиент маркетплейса + ссылки Portals
+│   ├─ portals_api.py    # HTTP-клиент Portals (публичный API фида)
+│   ├─ tonel_api.py      # legacy: ссылки + ручной анализ по ссылке
 │   ├─ price_estimator.py
 │   ├─ scanner.py        # авто-скан + пуш фото-уведомлений
 │   └─ scheduler.py
@@ -103,11 +105,15 @@ nft_flip_bot/
 
 ## Источник данных
 
-В ветке `master` использован условный HTTP-клиент со стабовым
-`scan_listings`. Реальные эндпоинты Portals публично не описаны, поэтому
-**из коробки фид пуст** — бот корректно запускается, авто-скан крутится
-и логирует «фид пуст», но push'ей не будет, пока в `services/tonel_api.py`
-не подставлены реальные URL/JSON-маппинг. Все остальные части (фильтр,
-расчёт прибыли, формат пуш-уведомления, `/range`, дедуп, отписка
-заблокировавших) работают как только клиент начнёт возвращать
-непустой список `NFTInfo`.
+Авто-скан тянет фид из публичного API Portals:
+`GET https://portal-market.com/api/nfts/search?limit=N&status=listed&sort_by=listed_at desc`.
+Авторизация не требуется для чтения ленты. Endpoint можно
+переопределить через переменную окружения `PORTALS_API_BASE`.
+
+Поля payload'а: `id` (UUID — наш `token_id`), `tg_id` (slug
+`PrettyPosy-26429` → `t.me/nft/<slug>`), `name`, `price` (TON),
+`attributes[].type ∈ {model, backdrop, symbol}` с `rarity_per_mille`
+(делим на 10 → проценты), `photo_url`, `floor_price`. Sales-history
+эндпоинт у Portals требует пользовательскую Telegram-сессию (`tma`
+init data), поэтому пока не используется — будет в отдельном PR через
+Telethon-клиент.
