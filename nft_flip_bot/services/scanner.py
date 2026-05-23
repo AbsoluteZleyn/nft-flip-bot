@@ -107,13 +107,21 @@ class AutoScanner:
             return sent_per_user
 
     async def run_for_user(self, user_id: int) -> int:
-        """Однократный прогон для конкретного пользователя (`/scan_now`)."""
+        """Однократный прогон для конкретного пользователя (`/scan_now`).
 
-        async with TonelClient() as client:
-            listings = await client.scan_listings(limit=self._settings.scan_limit)
+        В отличие от ``run_once`` берёт ``self._lock`` блокирующе: пользователь
+        явно попросил скан и ждёт результат, пропускать прогон молча нельзя.
+        Lock защищает от race с плановым прогоном: иначе одинаковый
+        ``(user_id, token_id)`` мог пройти через ``was_notified``/``send_message``
+        одновременно в двух корутинах и привести к дублям уведомлений.
+        """
 
-        candidates = self._filter_candidates(listings)
-        return await self.notify_user(user_id, candidates)
+        async with self._lock:
+            async with TonelClient() as client:
+                listings = await client.scan_listings(limit=self._settings.scan_limit)
+
+            candidates = self._filter_candidates(listings)
+            return await self.notify_user(user_id, candidates)
 
     # ------------------------------------------------------------------
 
