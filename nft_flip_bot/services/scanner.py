@@ -23,7 +23,7 @@ from ..config import Settings
 from ..models.db import Database
 from ..models.nft import NFTInfo
 from .price_estimator import estimate_flip, passes_filters
-from .tonel_api import TonelClient, build_trade_link
+from .tonel_api import TonelClient, build_portals_link, build_trade_link
 
 log = logging.getLogger(__name__)
 
@@ -87,23 +87,15 @@ class AutoScanner:
                 log.info("AutoScanner: фид пуст (или эндпоинт ещё не подключён)")
                 return {}
 
-            candidates = self._filter_candidates(listings)
-            if not candidates:
-                log.info(
-                    "AutoScanner: %d лотов в фиде, но ни один не прошёл фильтры",
-                    len(listings),
-                )
-                return {}
-
-            log.info(
-                "AutoScanner: %d/%d лотов прошли фильтры",
-                len(candidates),
-                len(listings),
-            )
-
             sent_per_user: dict[int, int] = {}
             for user_id in users:
+                candidates = await self._filter_candidates_for_user(listings, user_id)
                 sent_per_user[user_id] = await self.notify_user(user_id, candidates)
+            log.info(
+                "AutoScanner: обработал %d лотов, пушей по пользователям=%s",
+                len(listings),
+                sent_per_user,
+            )
             return sent_per_user
 
     async def run_for_user(self, user_id: int) -> int:
@@ -120,17 +112,22 @@ class AutoScanner:
             async with TonelClient() as client:
                 listings = await client.scan_listings(limit=self._settings.scan_limit)
 
-            candidates = self._filter_candidates(listings)
+            candidates = await self._filter_candidates_for_user(listings, user_id)
             return await self.notify_user(user_id, candidates)
 
     # ------------------------------------------------------------------
 
-    def _filter_candidates(self, listings: list[NFTInfo]) -> list[tuple[NFTInfo, float]]:
-        """Оставить только выгодные лоты. Возвращает [(nft, profit_ton), ...]."""
+    async def _filter_candidates_for_user(
+        self,
+        listings: list[NFTInfo],
+        user_id: int,
+    ) -> list[tuple[NFTInfo, float]]:
+        """Выбрать выгодные лоты с учётом персонального ``/range``."""
 
+        user_filter = await self._db.get_user_filter(user_id)
         result: list[tuple[NFTInfo, float]] = []
         for nft in listings:
-            ok, _reason = passes_filters(nft, self._settings)
+            ok, _reason = passes_filters(nft, self._settings, user_filter)
             if not ok:
                 continue
             estimate = estimate_flip(nft, self._settings)
@@ -160,11 +157,7 @@ class AutoScanner:
                 continue
 
             try:
-                await self._bot.send_message(
-                    chat_id=user_id,
-                    text=self._format_notification(nft, profit),
-                    disable_web_page_preview=True,
-                )
+                await self._send_one(user_id, nft, profit)
             except TelegramError as exc:
                 log.warning(
                     "AutoScanner: не смог уведомить user_id=%s: %s", user_id, exc
@@ -180,19 +173,69 @@ class AutoScanner:
             sent += 1
         return sent
 
+    async def _send_one(self, user_id: int, nft: NFTInfo, profit: float) -> None:
+        """Отправить одно уведомление: фото+подпись, или текст без фото."""
+
+        caption = self._format_notification(nft, profit)
+        if nft.photo_url:
+            try:
+                await self._bot.send_photo(
+                    chat_id=user_id,
+                    photo=nft.photo_url,
+                    caption=caption,
+                    parse_mode="Markdown",
+                )
+                return
+            except TelegramError as exc:
+                log.info(
+                    "AutoScanner: send_photo упал, фоллбэк на текст (%s)", exc
+                )
+        await self._bot.send_message(
+            chat_id=user_id,
+            text=caption,
+            parse_mode="Markdown",
+            disable_web_page_preview=True,
+        )
+
     def _format_notification(self, nft: NFTInfo, profit: float) -> str:
         estimate = estimate_flip(nft, self._settings)
         collection = nft.collection or "—"
+        title_name = nft.name or nft.token_id
+        gain_percent = (profit / nft.price_ton * 100.0) if nft.price_ton else 0.0
+
         lines = [
-            f"🔔 Найден выгодный NFT: `{nft.token_id}` ({collection})",
-            f"Цена: {nft.price_ton:.4f} TON · "
-            f"Resale ≈ {estimate.resale_price_ton:.4f} TON",
-            f"Ожидаемая прибыль ≈ {profit:.4f} TON "
-            f"(growth = {self._settings.growth_factor:+.0%})",
+            f"🔔 Найден выгодный подарок: *{title_name}* ({collection})",
         ]
+        if nft.model is not None:
+            lines.append(f"Модель: {nft.model.label()}")
+        if nft.background is not None:
+            lines.append(f"Фон: {nft.background.label()}")
+        if nft.pattern is not None:
+            lines.append(f"Узор: {nft.pattern.label()}")
         if nft.rank is not None:
             lines.append(f"Ранк: {nft.rank}")
-        link = build_trade_link(nft.token_id, estimate.resale_price_ton)
-        lines.append(f"🔗 {link}")
-        lines.append(f"➕ Добавить: /flip {nft.token_id}")
+
+        lines.append("")
+        lines.append(f"Цена: {nft.price_ton:.4f} TON")
+        lines.append(f"Resale ≈ {estimate.resale_price_ton:.4f} TON")
+        lines.append(
+            f"Комиссия: buy {estimate.buy_fee_ton:.4f} · "
+            f"sell {estimate.sell_fee_ton:.4f} · "
+            f"tx {estimate.tx_fee_ton:.4f} TON"
+        )
+        lines.append(
+            f"Прибыль ≈ {profit:.4f} TON ({gain_percent:+.1f}%)"
+        )
+        lines.append("")
+
+        portals_link = nft.portals_link or build_portals_link(nft.token_id)
+        if nft.telegram_link:
+            lines.append(f"📱 Telegram: {nft.telegram_link}")
+        lines.append(f"🛒 Купить: {portals_link}")
+        # Старая ссылка на trade оставлена для обратной совместимости с
+        # пользователями текущей версии Tonel/реверс-источника.
+        legacy_link = build_trade_link(nft.token_id, estimate.resale_price_ton)
+        lines.append(f"🔗 {legacy_link}")
+        lines.append("")
+        lines.append(f"➕ Добавить в портфель: /flip {nft.token_id}")
         return "\n".join(lines)

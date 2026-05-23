@@ -71,7 +71,8 @@ async def analyze_message(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         return
 
     estimate = estimate_flip(nft, settings)
-    ok, reason = passes_filters(nft, settings)
+    user_filter = await db.get_user_filter(update.effective_user.id)
+    ok, reason = passes_filters(nft, settings, user_filter)
 
     lines = [
         f"🔎 NFT `{nft.token_id}` ({nft.collection or '—'})",
@@ -89,8 +90,8 @@ async def analyze_message(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         f"(growth = {settings.growth_factor:+.0%})"
     )
     lines.append(
-        "Комиссия Tonel: "
-        f"{fmt_ton(estimate.tonel_fee_ton)} TON · "
+        f"Комиссия маркета: buy {fmt_ton(estimate.buy_fee_ton)} TON · "
+        f"sell {fmt_ton(estimate.sell_fee_ton)} TON · "
         f"Сетевая: {fmt_ton(estimate.tx_fee_ton)} TON"
     )
     lines.append(f"Ожидаемая прибыль: {fmt_ton(estimate.profit_ton)} TON")
