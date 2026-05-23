@@ -1,18 +1,21 @@
 """Команда `/history <UUID>` — статистика по комбо (модель + фон).
 
-PR #8a — **публичная** часть: сейчас активные листинги с тем же комбо
-(`filter_by_models` + `filter_by_backdrops` в API Portals).
-
-Sold-история требует Telethon-авторизации (`Authorization: tma <init_data>`)
-и попадёт в отдельный PR #8b.
+* **Активные листинги** (всегда доступно): публичный Portals endpoint
+  с `filter_by_models` + `filter_by_backdrops`.
+* **Sold-история** (опционально): требует ``Authorization: tma <init_data>``.
+  Файл с init_data генерируется скриптом
+  ``python -m nft_flip_bot.scripts.refresh_init_data`` (см. README).
+  Если файла нет — sold-секция показывает инструкцию.
 """
 
 from __future__ import annotations
 
 import html
 import logging
+from datetime import datetime, timezone
+from pathlib import Path
 from statistics import median
-from typing import Optional
+from typing import Any, Iterable, Optional
 
 from telegram import Update
 from telegram.constants import ParseMode
@@ -30,12 +33,40 @@ def _esc(value: object) -> str:
     return html.escape(str(value), quote=False)
 
 
-def _fmt_combo_section(
-    target: NFTInfo,
-    active: list[NFTInfo],
-) -> str:
-    """Сформировать блок «сейчас на маркете»."""
+def _load_init_data(path_str: str) -> Optional[str]:
+    if not path_str:
+        return None
+    path = Path(path_str)
+    if not path.is_file():
+        return None
+    try:
+        text = path.read_text(encoding="utf-8").strip()
+    except OSError as exc:
+        log.warning("/history: не смог прочитать %s: %s", path, exc)
+        return None
+    return text or None
 
+
+def _to_float(value: Any) -> Optional[float]:
+    if value is None:
+        return None
+    try:
+        return float(str(value))
+    except (TypeError, ValueError):
+        return None
+
+
+def _to_dt(value: Any) -> Optional[datetime]:
+    if not isinstance(value, str):
+        return None
+    txt = value.replace("Z", "+00:00")
+    try:
+        return datetime.fromisoformat(txt)
+    except ValueError:
+        return None
+
+
+def _fmt_combo_section(target: NFTInfo, active: list[NFTInfo]) -> str:
     if not active:
         return (
             "🟢 <b>Сейчас на маркете</b>: 0 шт. с таким же комбо.\n"
@@ -67,7 +98,6 @@ def _fmt_combo_section(
             f"{len(active) - cheaper_count - same_count}."
         )
 
-    # Топ-3 самых дешёвых для контекста.
     top = active[:3]
     if top:
         lines.append("")
@@ -80,6 +110,66 @@ def _fmt_combo_section(
             )
 
     return "\n".join(lines)
+
+
+def _fmt_sold_section(sold: list[dict[str, Any]]) -> str:
+    """Сформировать блок «продано» по сырым записям Portals."""
+
+    sold_prices: list[float] = []
+    sold_dates: list[datetime] = []
+    for s in sold:
+        # Цена продажи может быть в полях `sold_price`, `price`, `amount`.
+        for key in ("sold_price", "price", "amount", "sell_price"):
+            value = _to_float(s.get(key))
+            if value is not None and value > 0:
+                sold_prices.append(value)
+                break
+        # Дата продажи — в `sold_at`, `created_at`, `executed_at`.
+        for key in ("sold_at", "created_at", "executed_at", "completed_at"):
+            dt = _to_dt(s.get(key))
+            if dt is not None:
+                sold_dates.append(dt)
+                break
+
+    if not sold_prices:
+        return (
+            "🔴 <b>Sold (история продаж)</b>: данных нет "
+            "(возможно, ни одного с таким комбо ещё не продавалось)."
+        )
+
+    sold_prices.sort()
+    pmin, pmax = sold_prices[0], sold_prices[-1]
+    pavg = sum(sold_prices) / len(sold_prices)
+    pmed = median(sold_prices)
+
+    lines = [
+        f"🔴 <b>Sold (история продаж)</b>: {len(sold_prices)} шт.",
+        (
+            f"   Min {pmin:.2f} · Median {pmed:.2f} · Avg {pavg:.2f} · "
+            f"Max {pmax:.2f} TON"
+        ),
+    ]
+    if sold_dates:
+        last = max(sold_dates)
+        now = datetime.now(timezone.utc)
+        delta = now - last
+        if delta.days >= 1:
+            ago = f"{delta.days} дн назад"
+        elif delta.seconds >= 3600:
+            ago = f"{delta.seconds // 3600} ч назад"
+        else:
+            ago = f"{max(1, delta.seconds // 60)} мин назад"
+        lines.append(f"   Последняя продажа: {ago}")
+    return "\n".join(lines)
+
+
+def _sold_unavailable_section() -> str:
+    return (
+        "⚪ <b>Sold (история продаж)</b>: не настроено.\n"
+        "Для активации запусти локально:\n"
+        "<code>python -m nft_flip_bot.scripts.refresh_init_data</code>\n"
+        "Подробности — см. README."
+    )
 
 
 async def history_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -99,10 +189,12 @@ async def history_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         return
 
     uuid = args[0].strip()
+    init_data = _load_init_data(settings.portals_init_data_path)
 
     try:
         async with PortalsClient(
-            base_url=settings.portals_api_base
+            base_url=settings.portals_api_base,
+            init_data=init_data,
         ) as client:
             try:
                 target = await client.fetch_nft(uuid)
@@ -113,8 +205,8 @@ async def history_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
                 )
                 return
 
-            model_name: Optional[str] = target.model.name if target.model else None
-            background_name: Optional[str] = (
+            model_name = target.model.name if target.model else None
+            background_name = (
                 target.background.name if target.background else None
             )
 
@@ -130,6 +222,19 @@ async def history_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
                 background_name=background_name,
                 limit=100,
             )
+
+            sold: list[dict[str, Any]] = []
+            sold_error: Optional[str] = None
+            if init_data:
+                try:
+                    sold = await client.list_combo_sold(
+                        model_name=model_name,
+                        background_name=background_name,
+                        limit=50,
+                    )
+                except TonelError as exc:
+                    sold_error = str(exc)
+                    log.info("/history: sold lookup failed: %s", exc)
     except TonelError as exc:
         log.warning("/history: portals error: %s", exc)
         await update.message.reply_text(
@@ -139,25 +244,35 @@ async def history_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         return
 
     title_name = _esc(target.name or target.token_id)
-    header = (
-        f"🕘 <b>История по комбо</b>\n"
-        f"Подарок: <b>{title_name}</b>\n"
-        f"Модель: {_esc(model_name)}"
-    )
+    header_lines = [
+        f"🕘 <b>История по комбо</b>",
+        f"Подарок: <b>{title_name}</b>",
+    ]
+    model_line = f"Модель: {_esc(model_name)}"
     if target.model and target.model.rarity_percent is not None:
-        header += f" ({target.model.rarity_percent:.2f}%)"
-    header += f"\nФон: {_esc(background_name)}"
+        model_line += f" ({target.model.rarity_percent:.2f}%)"
+    header_lines.append(model_line)
+    bg_line = f"Фон: {_esc(background_name)}"
     if target.background and target.background.rarity_percent is not None:
-        header += f" ({target.background.rarity_percent:.2f}%)"
+        bg_line += f" ({target.background.rarity_percent:.2f}%)"
+    header_lines.append(bg_line)
+    header = "\n".join(header_lines)
 
     combo_section = _fmt_combo_section(target, active)
 
-    sold_section = (
-        "\n⚪ <b>Sold (история продаж)</b>: требует Telethon-настройки "
-        "(см. <code>/history_auth</code>, появится в следующем PR)."
-    )
+    if init_data:
+        if sold_error:
+            sold_section = (
+                "🟠 <b>Sold (история продаж)</b>: init_data не подошёл "
+                f"(<code>{_esc(sold_error[:200])}</code>). "
+                "Перевыпусти через <code>refresh_init_data</code>."
+            )
+        else:
+            sold_section = _fmt_sold_section(sold)
+    else:
+        sold_section = _sold_unavailable_section()
 
-    text = f"{header}\n\n{combo_section}\n{sold_section}"
+    text = f"{header}\n\n{combo_section}\n\n{sold_section}"
     await update.message.reply_text(
         text,
         parse_mode=ParseMode.HTML,
