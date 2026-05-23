@@ -207,6 +207,47 @@ class PortalsClient:
                 listings.append(nft)
         return listings
 
+    async def list_combo_active(
+        self,
+        model_name: str,
+        background_name: str,
+        limit: int = 50,
+    ) -> list[NFTInfo]:
+        """Активные листинги с тем же ``model + background`` (комбо).
+
+        Используется для команды ``/history``: показывает, сколько таких же
+        подарков сейчас продаётся, минимальную/среднюю/максимальную цену.
+
+        Параметры Portals: ``filter_by_models``/``filter_by_backdrops`` —
+        принимают **имя** модели/фона (точно как в `attributes[].value`).
+        """
+
+        params = {
+            "limit": str(max(1, min(200, int(limit)))),
+            "offset": "0",
+            "status": "listed",
+            "sort_by": "price asc",
+            "filter_by_models": model_name,
+            "filter_by_backdrops": background_name,
+        }
+        try:
+            response = await self._session.get(PORTALS_SEARCH_PATH, params=params)
+            response.raise_for_status()
+        except httpx.HTTPError as exc:
+            raise TonelError(f"Portals list_combo_active failed: {exc}") from exc
+
+        payload = response.json()
+        raw_results: Iterable[Any] = payload.get("results") or []
+
+        listings: list[NFTInfo] = []
+        for raw in raw_results:
+            if not isinstance(raw, dict):
+                continue
+            nft = _parse_listing(raw)
+            if nft is not None:
+                listings.append(nft)
+        return listings
+
     async def fetch_nft(self, uuid: str) -> NFTInfo:
         """Один лот по UUID Portals."""
 
