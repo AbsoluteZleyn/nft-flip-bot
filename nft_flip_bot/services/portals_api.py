@@ -255,6 +255,54 @@ class PortalsClient:
                 listings.append(nft)
         return listings
 
+    async def list_nft_sales(
+        self,
+        uuid: str,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        """История продаж конкретного лота по UUID.
+
+        Эндпоинт ``GET /api/nfts/<UUID>/sales`` — реверс-инженеринг:
+        путь-стиль возвращает 401 «missing auth» без токена и ожидает
+        ``Authorization: tma <init_data>``. Путь с query-param вернул
+        «400 invalid_nft_id» — это другой эндпоинт (серверная
+        валидация не смотрела на значение).
+
+        Требует ``init_data`` — отдаёт ``Authorization: tma <init_data>``.
+        """
+
+        if not self._init_data:
+            raise TonelError(
+                "list_nft_sales: требуется init_data (Telethon-сессия)"
+            )
+
+        params = {
+            "limit": str(max(1, min(200, int(limit)))),
+            "offset": "0",
+        }
+        try:
+            response = await self._session.get(
+                f"/nfts/{uuid}/sales", params=params
+            )
+        except httpx.HTTPError as exc:
+            raise TonelError(f"Portals list_nft_sales failed: {exc}") from exc
+
+        if response.status_code != 200:
+            raise TonelError(
+                f"Portals list_nft_sales вернул HTTP {response.status_code}: "
+                f"{response.text[:300]}"
+            )
+
+        payload = response.json()
+        if isinstance(payload, dict):
+            results = payload.get("results") or payload.get("data") or []
+            if isinstance(results, list):
+                return [r for r in results if isinstance(r, dict)]
+            return []
+        if isinstance(payload, list):
+            return [r for r in payload if isinstance(r, dict)]
+        return []
+
     async def list_combo_sold(
         self,
         model_name: str,
@@ -293,21 +341,30 @@ class PortalsClient:
             "filter_by_backdrops": background_name,
         }
 
+        # Комбо-sold-эндпоинт в Portals не подтверждён. Пробуем
+        # кандидатов, все ответы логируем — юзер пришлёт лог, и
+        # следующий PR зафиксирует реальный эндпоинт (если будет найден).
         candidates = [
+            "/nfts/sold",
+            "/nfts/history",
+            "/market/sold",
+            "/marketplace/sold",
+            "/market/sales",
+            "/sold",
+            "/listings/sold",
             "/sales",
             "/trades",
             "/activity",
-            "/nfts/sales",
         ]
-        last_error: Optional[str] = None
+        candidate_results: list[str] = []
         for path in candidates:
             try:
                 response = await self._session.get(path, params=params)
             except httpx.HTTPError as exc:
-                last_error = f"{path}: {exc}"
+                candidate_results.append(f"{path}: {exc}")
                 continue
             if response.status_code == 200:
-                log.info("Portals sold endpoint = %s", path)
+                log.info("Portals sold combo endpoint = %s", path)
                 payload = response.json()
                 if isinstance(payload, dict):
                     results = payload.get("results") or payload.get("data") or []
@@ -317,14 +374,14 @@ class PortalsClient:
                 if isinstance(payload, list):
                     return [r for r in payload if isinstance(r, dict)]
                 return []
-            last_error = (
-                f"{path}: HTTP {response.status_code} {response.text[:200]}"
+            candidate_results.append(
+                f"{path}: HTTP {response.status_code} {response.text[:150]}"
             )
-            log.debug("Portals sold candidate %s failed: %s", path, last_error)
 
+        log.info("Portals combo-sold candidates failures:\n  %s", "\n  ".join(candidate_results))
         raise TonelError(
-            f"Portals list_combo_sold: ни один эндпоинт не сработал. "
-            f"Последняя ошибка: {last_error}"
+            "Portals list_combo_sold: все кандидаты не сработали. "
+            f"Последний ответ: {candidate_results[-1] if candidate_results else 'пусто'}"
         )
 
     async def fetch_nft(self, uuid: str) -> NFTInfo:
