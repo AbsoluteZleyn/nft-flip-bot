@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import asyncio
+import html
 import logging
 from typing import Optional
 
@@ -185,9 +186,11 @@ class AutoScanner:
             if await self._db.was_notified(user_id, nft.token_id):
                 continue
 
+            send_ok = True
             try:
                 await self._send_one(user_id, nft, profit)
             except TelegramError as exc:
+                send_ok = False
                 log.warning(
                     "AutoScanner: не смог уведомить user_id=%s: %s", user_id, exc
                 )
@@ -196,10 +199,14 @@ class AutoScanner:
                     await self._db.set_subscription(user_id, False)
                     log.info("AutoScanner: отписал user_id=%s (бот заблокирован)", user_id)
                     return sent
-                continue
 
+            # Отмечаем lot как «видели» ДАЖЕ при ошибке отправки — иначе
+            # ретраим бесконечно каждый прогон и забиваем лог. Неотправленный
+            # успешный лот = потеря, но фатального ничего нет — бот продолжит
+            # жить и в следующем скане найдёт свежие варианты.
             await self._db.mark_notified(user_id, nft.token_id)
-            sent += 1
+            if send_ok:
+                sent += 1
         return sent
 
     async def _send_one(self, user_id: int, nft: NFTInfo, profit: float) -> None:
@@ -212,7 +219,7 @@ class AutoScanner:
                     chat_id=user_id,
                     photo=nft.photo_url,
                     caption=caption,
-                    parse_mode="Markdown",
+                    parse_mode="HTML",
                 )
                 return
             except TelegramError as exc:
@@ -222,18 +229,24 @@ class AutoScanner:
         await self._bot.send_message(
             chat_id=user_id,
             text=caption,
-            parse_mode="Markdown",
+            parse_mode="HTML",
             disable_web_page_preview=True,
         )
 
     def _format_notification(self, nft: NFTInfo, profit: float) -> str:
+        # HTML-экранируем всё, что приходит извне (имена, коллекции,
+        # атрибуты, URL’ы). Telegram в HTML парсит только <,>,&
+        # — всё остальное безопасно отдавать как есть.
+        def esc(value: object) -> str:
+            return html.escape(str(value), quote=False)
+
         estimate = estimate_flip(nft, self._settings)
-        collection = nft.collection or "—"
-        title_name = nft.name or nft.token_id
+        collection = esc(nft.collection or "—")
+        title_name = esc(nft.name or nft.token_id)
         gain_percent = (profit / nft.price_ton * 100.0) if nft.price_ton else 0.0
 
         lines = [
-            f"🔔 Найден выгодный подарок: *{title_name}* ({collection})",
+            f"🔔 Найден выгодный подарок: <b>{title_name}</b> ({collection})",
         ]
 
         badges: list[str] = []
@@ -250,11 +263,11 @@ class AutoScanner:
             lines.append(" · ".join(badges))
 
         if nft.model is not None:
-            lines.append(f"Модель: {nft.model.label()}")
+            lines.append(f"Модель: {esc(nft.model.label())}")
         if nft.background is not None:
-            lines.append(f"Фон: {nft.background.label()}")
+            lines.append(f"Фон: {esc(nft.background.label())}")
         if nft.pattern is not None:
-            lines.append(f"Узор: {nft.pattern.label()}")
+            lines.append(f"Узор: {esc(nft.pattern.label())}")
         if nft.rank is not None:
             lines.append(f"Ранк: {nft.rank}")
 
@@ -276,8 +289,8 @@ class AutoScanner:
 
         portals_link = nft.portals_link or build_portals_link(nft.token_id)
         if nft.telegram_link:
-            lines.append(f"📱 Telegram: {nft.telegram_link}")
-        lines.append(f"🛒 Купить: {portals_link}")
+            lines.append(f"📱 Telegram: {esc(nft.telegram_link)}")
+        lines.append(f"🛒 Купить: {esc(portals_link)}")
         lines.append("")
-        lines.append(f"➕ Добавить в портфель: /flip {nft.token_id}")
+        lines.append(f"➕ Добавить в портфель: /flip {esc(nft.token_id)}")
         return "\n".join(lines)
