@@ -43,6 +43,11 @@ class Settings:
     tonel_fee: float
     tx_fee_ton: float
 
+    # Авто-сканер
+    scan_interval_min: int
+    scan_max_notify: int
+    scan_limit: int
+
     # Прочее
     tonel_allowed_host: str = "tonel.io"
 
@@ -59,4 +64,7 @@ def load_settings() -> Settings:
         growth_factor=_env_float("GROWTH_FACTOR", 0.5),
         tonel_fee=_env_float("TONEL_FEE", 0.02),
         tx_fee_ton=_env_float("TX_FEE_TON", 0.05),
+        scan_interval_min=_env_int("SCAN_INTERVAL_MIN", 5),
+        scan_max_notify=_env_int("SCAN_MAX_NOTIFY", 5),
+        scan_limit=_env_int("SCAN_LIMIT", 50),
     )
