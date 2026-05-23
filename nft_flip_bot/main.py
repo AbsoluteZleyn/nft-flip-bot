@@ -23,6 +23,7 @@ from .handlers import (
     help_cmd,
     list_cmd,
     on_callback,
+    range_cmd,
     remove_cmd,
     scan_now_cmd,
     scan_off_cmd,
@@ -69,6 +70,7 @@ def build_application(settings: Settings, db: Database) -> Application:
     app.add_handler(CommandHandler("scan_on", scan_on_cmd))
     app.add_handler(CommandHandler("scan_off", scan_off_cmd))
     app.add_handler(CommandHandler("scan_now", scan_now_cmd))
+    app.add_handler(CommandHandler("range", range_cmd))
     app.add_handler(CallbackQueryHandler(on_callback, pattern=r"^flip:"))
     app.add_handler(
         MessageHandler(filters.TEXT & ~filters.COMMAND, analyze_message)

@@ -16,7 +16,7 @@ from urllib.parse import urlparse
 import httpx
 from bs4 import BeautifulSoup
 
-from ..models.nft import NFTInfo
+from ..models.nft import Attribute, NFTInfo
 
 log = logging.getLogger(__name__)
 
@@ -30,6 +30,13 @@ TONEL_TRADE_LINK = TONEL_BASE + "/trade?item={token_id}&price={price}"
 # TODO: эндпоинт фида лотов (для авто-скана). Без реальных путей Tonel
 # скан вернёт пустой список — это ожидаемо и попадаёт в логи.
 TONEL_LISTINGS_API = TONEL_BASE + "/api/v1/listings"
+
+# Telegram Mini App, через который пользователь покупает подарок в Portals.
+# Этот URL открывается из Telegram-клиента, домен portals-market.com у
+# Portals напрямую недоступен из обычного браузера.
+PORTALS_MINIAPP_TEMPLATE = "https://t.me/portals/market?startapp=gift_{token_id}"
+# Прямая ссылка на подарок в Telegram (web preview работает без авторизации).
+TELEGRAM_GIFT_TEMPLATE = "https://t.me/nft/{slug}"
 
 # Принимаем только HTTPS-ссылки на tonel.io (см. требования к безопасности).
 ITEM_URL_RE = re.compile(
@@ -95,6 +102,66 @@ def parse_token_id(text: str) -> Optional[str]:
 
 def build_trade_link(token_id: str, price_ton: float) -> str:
     return TONEL_TRADE_LINK.format(token_id=token_id, price=f"{price_ton:.4f}")
+
+
+def build_portals_link(token_id: str) -> str:
+    """Сформировать ссылку на лот в Portals Mini App.
+
+    Открывается из любого Telegram-клиента (мобильного и десктопного).
+    """
+
+    return PORTALS_MINIAPP_TEMPLATE.format(token_id=token_id)
+
+
+def build_telegram_gift_link(slug: Optional[str]) -> Optional[str]:
+    """Сформировать ссылку на подарок в Telegram (``t.me/nft/<slug>``).
+
+    ``slug`` — это «<CollectionName>-<number>», например ``PlushPepe-12345``.
+    Если фид не прислал slug, возвращаем None: бот не должен генерить
+    некорректные deep-link'и.
+    """
+
+    if not slug:
+        return None
+    cleaned = str(slug).strip().lstrip("/")
+    if not cleaned:
+        return None
+    return TELEGRAM_GIFT_TEMPLATE.format(slug=cleaned)
+
+
+def _parse_attribute(raw: object) -> Optional[Attribute]:
+    """Распарсить одно свойство подарка из payload'а маркетплейса.
+
+    Поддерживаем два формата:
+    * ``{"name": "Sakura", "rarity_percent": 0.5}`` — структурный
+    * ``"Sakura"``                                   — голая строка без редкости
+    """
+
+    if raw is None:
+        return None
+    if isinstance(raw, str):
+        name = raw.strip()
+        if not name:
+            return None
+        return Attribute(name=name)
+    if isinstance(raw, dict):
+        name = _first_not_none(raw.get("name"), raw.get("value"), raw.get("label"))
+        if name is None:
+            return None
+        rarity = _parse_float(
+            _first_not_none(
+                raw.get("rarity_percent"),
+                raw.get("rarity"),
+                raw.get("percent"),
+            )
+        )
+        # Нормализуем: если редкость пришла как доля (0.005), переведём в %.
+        if rarity is not None and 0 <= rarity <= 1 and "rarity" in raw and "rarity_percent" not in raw:
+            rarity = rarity * 100.0
+        if rarity is not None and rarity > 100:
+            rarity = None
+        return Attribute(name=str(name), rarity_percent=rarity)
+    return None
 
 
 def _parse_float(value: object) -> Optional[float]:
@@ -292,7 +359,13 @@ class TonelClient:
         return result
 
     def _parse_listing_item(self, payload: dict) -> Optional[NFTInfo]:
-        """Преобразовать входящий элемент фида в NFTInfo."""
+        """Преобразовать входящий элемент фида в NFTInfo.
+
+        Маркетплейсы по-разному называют поля — поддерживаем несколько
+        синонимов через :func:`_first_not_none`. Атрибуты подарка (model,
+        background, pattern) ожидаются как объекты ``{"name": str,
+        "rarity_percent": float}`` или как чистая строка.
+        """
 
         raw_id = _first_not_none(payload.get("id"), payload.get("token_id"))
         if raw_id is None:
@@ -313,6 +386,48 @@ class TonelClient:
         raw_name = _first_not_none(payload.get("name"), "")
         raw_rank = _first_not_none(payload.get("rank"), payload.get("rarity_rank"))
 
+        # Атрибуты Telegram-Gift'а.
+        attrs = payload.get("attributes") if isinstance(payload.get("attributes"), dict) else {}
+        model = _parse_attribute(
+            _first_not_none(payload.get("model"), attrs.get("model") if attrs else None)
+        )
+        background = _parse_attribute(
+            _first_not_none(
+                payload.get("background"),
+                payload.get("backdrop"),
+                attrs.get("background") if attrs else None,
+                attrs.get("backdrop") if attrs else None,
+            )
+        )
+        pattern = _parse_attribute(
+            _first_not_none(
+                payload.get("pattern"),
+                payload.get("symbol"),
+                attrs.get("pattern") if attrs else None,
+                attrs.get("symbol") if attrs else None,
+            )
+        )
+
+        photo_url = _first_not_none(
+            payload.get("photo_url"),
+            payload.get("photo"),
+            payload.get("image"),
+            payload.get("image_url"),
+            payload.get("preview"),
+        )
+        slug = _first_not_none(
+            payload.get("slug"),
+            payload.get("gift_slug"),
+            payload.get("telegram_slug"),
+        )
+        portals_url_raw = _first_not_none(
+            payload.get("portals_url"),
+            payload.get("portals_link"),
+        )
+        portals_link = (
+            str(portals_url_raw) if portals_url_raw else build_portals_link(token_id)
+        )
+
         return NFTInfo(
             token_id=token_id,
             collection=str(raw_collection),
@@ -322,6 +437,12 @@ class TonelClient:
             volume_24h_ton=_parse_float(payload.get("volume_24h_ton")),
             volume_7d_ton=_parse_float(payload.get("volume_7d_ton")),
             url=TONEL_ITEM_PAGE.format(token_id=token_id),
+            model=model,
+            background=background,
+            pattern=pattern,
+            photo_url=str(photo_url) if photo_url else None,
+            telegram_link=build_telegram_gift_link(slug),
+            portals_link=portals_link,
         )
 
     # ------------------------------------------------------------------

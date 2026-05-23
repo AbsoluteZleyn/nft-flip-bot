@@ -8,7 +8,7 @@ from typing import Optional
 
 import aiosqlite
 
-from .nft import BudgetState, FlipItem
+from .nft import BudgetState, FlipItem, UserFilter
 
 log = logging.getLogger(__name__)
 
@@ -53,6 +53,16 @@ CREATE TABLE IF NOT EXISTS notified (
     token_id     TEXT NOT NULL,
     notified_at  TEXT NOT NULL,
     PRIMARY KEY (user_id, token_id),
+    FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
+);
+
+-- Персональный диапазон цен для авто-скана и анализа (`/range <min> <max>`).
+-- NULL → использовать глобальные MIN_PRICE_TON / MAX_PRICE_TON из env.
+CREATE TABLE IF NOT EXISTS user_filters (
+    user_id        INTEGER PRIMARY KEY,
+    min_price_ton  REAL,
+    max_price_ton  REAL,
+    updated_at     TEXT NOT NULL,
     FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
 );
 """
@@ -311,3 +321,56 @@ class Database:
             removed = cur.rowcount
             await db.commit()
         return int(removed or 0)
+
+    # ---- user filters ----------------------------------------------------
+
+    async def set_user_filter(
+        self,
+        user_id: int,
+        min_price_ton: Optional[float],
+        max_price_ton: Optional[float],
+    ) -> None:
+        async with aiosqlite.connect(self.path) as db:
+            await db.execute(
+                """
+                INSERT INTO user_filters(user_id, min_price_ton, max_price_ton,
+                                         updated_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(user_id) DO UPDATE SET
+                    min_price_ton=excluded.min_price_ton,
+                    max_price_ton=excluded.max_price_ton,
+                    updated_at=excluded.updated_at
+                """,
+                (
+                    user_id,
+                    min_price_ton,
+                    max_price_ton,
+                    datetime.now(timezone.utc).isoformat(),
+                ),
+            )
+            await db.commit()
+
+    async def get_user_filter(self, user_id: int) -> Optional[UserFilter]:
+        async with aiosqlite.connect(self.path) as db:
+            async with db.execute(
+                "SELECT min_price_ton, max_price_ton FROM user_filters "
+                "WHERE user_id=?",
+                (user_id,),
+            ) as cur:
+                row = await cur.fetchone()
+        if row is None:
+            return None
+        return UserFilter(
+            user_id=user_id,
+            min_price_ton=row[0],
+            max_price_ton=row[1],
+        )
+
+    async def clear_user_filter(self, user_id: int) -> bool:
+        async with aiosqlite.connect(self.path) as db:
+            cur = await db.execute(
+                "DELETE FROM user_filters WHERE user_id=?", (user_id,)
+            )
+            removed = cur.rowcount > 0
+            await db.commit()
+        return removed

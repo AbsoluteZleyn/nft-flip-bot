@@ -1,6 +1,14 @@
 """Domain models package."""
 
 from .db import Database
-from .nft import BudgetState, FlipEstimate, FlipItem, NFTInfo
+from .nft import Attribute, BudgetState, FlipEstimate, FlipItem, NFTInfo, UserFilter
 
-__all__ = ["Database", "BudgetState", "FlipEstimate", "FlipItem", "NFTInfo"]
+__all__ = [
+    "Database",
+    "Attribute",
+    "BudgetState",
+    "FlipEstimate",
+    "FlipItem",
+    "NFTInfo",
+    "UserFilter",
+]

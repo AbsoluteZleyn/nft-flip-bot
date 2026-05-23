@@ -31,7 +31,8 @@ async def scan_on_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         f"{settings.scan_interval_min} мин буду слать тебе до "
         f"{settings.scan_max_notify} новых выгодных лотов за прогон.\n\n"
         "Отключить: /scan_off\n"
-        "Прогон вручную сейчас: /scan_now"
+        "Прогон вручную сейчас: /scan_now\n"
+        "Свой диапазон цен: /range <min> <max>"
     )
 
 
