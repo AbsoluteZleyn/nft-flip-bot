@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
@@ -186,7 +186,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         current_price_ton=float(payload["current_price_ton"]),
         resale_price_ton=float(payload["resale_price_ton"]),
         profit_ton=float(payload["profit_ton"]),
-        added_at=datetime.utcnow(),
+        added_at=datetime.now(timezone.utc),
     )
     await db.add_nft(item)
     pending.pop(token_id, None)

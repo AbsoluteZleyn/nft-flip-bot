@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 import aiosqlite
@@ -63,7 +63,7 @@ class Database:
                 VALUES (?, ?, ?)
                 ON CONFLICT(user_id) DO UPDATE SET username=excluded.username
                 """,
-                (user_id, username or "", datetime.utcnow().isoformat()),
+                (user_id, username or "", datetime.now(timezone.utc).isoformat()),
             )
             await db.execute(
                 """

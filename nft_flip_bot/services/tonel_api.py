@@ -10,7 +10,7 @@ from __future__ import annotations
 import logging
 import re
 from datetime import datetime
-from typing import Optional
+from typing import Any, Optional
 from urllib.parse import urlparse
 
 import httpx
@@ -28,10 +28,24 @@ TONEL_ITEM_API = TONEL_BASE + "/api/v1/items/{token_id}"
 TONEL_ITEM_PAGE = TONEL_BASE + "/item/{token_id}"
 TONEL_TRADE_LINK = TONEL_BASE + "/trade?item={token_id}&price={price}"
 
+# Принимаем только HTTPS-ссылки на tonel.io (см. требования к безопасности).
 ITEM_URL_RE = re.compile(
-    r"^https?://(?:www\.)?tonel\.io/item/(?P<token_id>[A-Za-z0-9_\-]+)/?(?:\?.*)?$"
+    r"^https://(?:www\.)?tonel\.io/item/(?P<token_id>[A-Za-z0-9_\-]+)/?(?:\?.*)?$"
 )
 TOKEN_ID_RE = re.compile(r"^[A-Za-z0-9_\-]{1,64}$")
+
+
+def _first_not_none(*values: Any) -> Any:
+    """Вернуть первое значение, которое строго не None.
+
+    Используется вместо ``a or b`` при выборе альтернативного поля payload'а,
+    т.к. ``or`` считает ложными в т.ч. ``0`` и пустую строку.
+    """
+
+    for value in values:
+        if value is not None:
+            return value
+    return None
 
 
 class TonelError(RuntimeError):
@@ -49,7 +63,7 @@ def is_allowed_url(url: str) -> bool:
         parsed = urlparse(url)
     except ValueError:
         return False
-    if parsed.scheme not in {"http", "https"}:
+    if parsed.scheme != "https":
         return False
     host = (parsed.hostname or "").lower()
     return host == ALLOWED_HOST or host.endswith("." + ALLOWED_HOST)
@@ -66,8 +80,8 @@ def parse_token_id(text: str) -> Optional[str]:
     if m:
         return m.group("token_id")
 
+    # URL не из tonel.io / не HTTPS — отбрасываем (SSRF guard).
     if text.lower().startswith(("http://", "https://")):
-        # URL не из tonel.io — отбрасываем (SSRF guard)
         return None
 
     if TOKEN_ID_RE.match(text):
@@ -155,8 +169,13 @@ class TonelClient:
             raise
         except TonelError as exc:
             log.warning("Tonel API недоступен (%s), пробую HTML", exc)
+        except httpx.HTTPError as exc:
+            log.warning("Tonel API HTTP error (%s), пробую HTML", exc)
 
-        return await self._fetch_via_html(token_id)
+        try:
+            return await self._fetch_via_html(token_id)
+        except httpx.HTTPError as exc:
+            raise TonelError(f"Сетевая ошибка при обращении к Tonel: {exc}") from exc
 
     # ------------------------------------------------------------------
 
@@ -174,30 +193,39 @@ class TonelClient:
             raise TonelError("Tonel API вернул не-JSON") from exc
 
         # TODO: подогнать под реальную структуру ответа Tonel.
-        price = _parse_float(payload.get("price_ton") or payload.get("price"))
+        # Используем _first_not_none, чтобы корректно пробрасывать значения
+        # типа 0 (валидная цена/ранк), которые ``or`` посчитал бы ложными.
+        price = _parse_float(_first_not_none(payload.get("price_ton"), payload.get("price")))
         if price is None:
             raise TonelError("В ответе нет поля цены")
 
-        history_raw = payload.get("price_history") or []
+        history_raw = payload.get("price_history")
+        if history_raw is None:
+            history_raw = []
         history: list[tuple[datetime, float]] = []
         for entry in history_raw:
-            ts = entry.get("ts") or entry.get("date")
+            ts = _first_not_none(entry.get("ts"), entry.get("date"))
             value = _parse_float(entry.get("price"))
-            if not ts or value is None:
+            if ts is None or value is None:
                 continue
             try:
                 history.append((datetime.fromisoformat(str(ts)), value))
             except ValueError:
                 continue
 
+        raw_id = _first_not_none(payload.get("id"), token_id)
+        raw_collection = _first_not_none(
+            payload.get("collection"), payload.get("collection_name"), ""
+        )
+        raw_name = _first_not_none(payload.get("name"), "")
+        raw_rank = _first_not_none(payload.get("rank"), payload.get("rarity_rank"))
+
         return NFTInfo(
-            token_id=str(payload.get("id") or token_id),
-            collection=str(
-                payload.get("collection") or payload.get("collection_name") or ""
-            ),
-            name=str(payload.get("name") or ""),
+            token_id=str(raw_id),
+            collection=str(raw_collection),
+            name=str(raw_name),
             price_ton=price,
-            rank=_parse_int(payload.get("rank") or payload.get("rarity_rank")),
+            rank=_parse_int(raw_rank),
             volume_24h_ton=_parse_float(payload.get("volume_24h_ton")),
             volume_7d_ton=_parse_float(payload.get("volume_7d_ton")),
             history=history,
@@ -223,9 +251,13 @@ class TonelClient:
                 tag = soup.find(attrs={"data-test": name})
             if tag is None:
                 return None
-            return tag.get_text(strip=True) or tag.get("content")
+            text = tag.get_text(strip=True)
+            if text:
+                return text
+            content = tag.get("content")
+            return content if content else None
 
-        price = _parse_float(_attr("price") or _attr("price-ton"))
+        price = _parse_float(_first_not_none(_attr("price"), _attr("price-ton")))
         if price is None:
             # TODO: при необходимости добавить обработку капчи.
             raise TonelError("Не удалось распарсить цену из HTML")
