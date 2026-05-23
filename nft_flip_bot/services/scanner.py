@@ -155,8 +155,17 @@ class AutoScanner:
                 continue
             result.append((nft, estimate.profit_ton))
 
-        # Сортируем по убыванию прибыли — сначала самые выгодные.
-        result.sort(key=lambda x: x[1], reverse=True)
+        # Приоритет — по трёмке (below_floor desc, monochrome desc, profit desc):
+        # первыми идут лоты и ниже флора × монохромы, затем любые
+        # выгодные в порядке убывания прибыли.
+        result.sort(
+            key=lambda x: (
+                x[0].is_below_floor,
+                x[0].is_monochrome,
+                x[1],
+            ),
+            reverse=True,
+        )
         return result
 
     async def notify_user(
@@ -226,6 +235,20 @@ class AutoScanner:
         lines = [
             f"🔔 Найден выгодный подарок: *{title_name}* ({collection})",
         ]
+
+        badges: list[str] = []
+        if nft.is_below_floor:
+            assert nft.floor_price_ton is not None  # for type checker
+            discount = (nft.floor_price_ton - nft.price_ton) / nft.floor_price_ton * 100.0
+            badges.append(
+                f"🔥 НИЖЕ ФЛОРА на {discount:.1f}% "
+                f"(floor {nft.floor_price_ton:.2f} TON)"
+            )
+        if nft.is_monochrome:
+            badges.append("🎨 МОНОХРОМ")
+        if badges:
+            lines.append(" · ".join(badges))
+
         if nft.model is not None:
             lines.append(f"Модель: {nft.model.label()}")
         if nft.background is not None:
@@ -236,7 +259,10 @@ class AutoScanner:
             lines.append(f"Ранк: {nft.rank}")
 
         lines.append("")
-        lines.append(f"Цена: {nft.price_ton:.4f} TON")
+        price_line = f"Цена: {nft.price_ton:.4f} TON"
+        if nft.floor_price_ton is not None:
+            price_line += f" · floor {nft.floor_price_ton:.2f} TON"
+        lines.append(price_line)
         lines.append(f"Resale ≈ {estimate.resale_price_ton:.4f} TON")
         lines.append(
             f"Комиссия: buy {estimate.buy_fee_ton:.4f} · "
