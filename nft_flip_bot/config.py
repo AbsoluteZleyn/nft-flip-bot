@@ -69,9 +69,13 @@ def load_settings() -> Settings:
         bot_token=os.getenv("BOT_TOKEN", ""),
         db_path=os.getenv("DB_PATH", "nft_flip_bot.sqlite3"),
         min_price_ton=_env_float("MIN_PRICE_TON", 0.0),
-        max_price_ton=_env_float("MAX_PRICE_TON", 5.0),
+        # 50 TON покрывает большинство реальных листингов Portals;
+        # пользователь сужает диапазон через /range.
+        max_price_ton=_env_float("MAX_PRICE_TON", 50.0),
         max_rank=_env_int("MAX_RANK", 1000),
-        min_volume_ton=_env_float("MIN_VOLUME_TON", 1.0),
+        # Portals не отдаёт per-NFT 24h-объём, поэтому фильтр по нему
+        # всё равно фактически отключён; 0 — явно безопаснее.
+        min_volume_ton=_env_float("MIN_VOLUME_TON", 0.0),
         growth_factor=_env_float("GROWTH_FACTOR", 0.5),
         tonel_fee=tonel_fee,
         tonel_buy_fee=tonel_buy_fee,

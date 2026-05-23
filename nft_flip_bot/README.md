@@ -64,9 +64,9 @@ BOT_TOKEN=YOUR_TELEGRAM_BOT_TOKEN docker compose up -d --build
 | `BOT_TOKEN`         | —                      | Токен Telegram-бота (обязателен)                               |
 | `DB_PATH`           | `nft_flip_bot.sqlite3` | Путь к SQLite базе                                             |
 | `MIN_PRICE_TON`     | `0`                    | Глобальный минимум цены NFT в TON                              |
-| `MAX_PRICE_TON`     | `5`                    | Глобальный максимум цены NFT в TON                             |
+| `MAX_PRICE_TON`     | `50`                   | Глобальный максимум цены NFT в TON                             |
 | `MAX_RANK`          | `1000`                 | Максимальный ранк                                              |
-| `MIN_VOLUME_TON`    | `1`                    | Минимальный 24h-объём в TON                                    |
+| `MIN_VOLUME_TON`    | `0`                    | Минимальный 24h-объём в TON (Portals не отдаёт per-NFT volume) |
 | `GROWTH_FACTOR`     | `0.5`                  | Множитель ожидаемого роста цены при перепродаже                |
 | `TONEL_FEE`         | `0.05`                 | Комиссия маркета при **продаже** (доля от resale)              |
 | `TONEL_BUY_FEE`     | =`TONEL_FEE`           | Комиссия маркета при **покупке** (доля от цены)                |
